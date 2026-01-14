@@ -1,3 +1,4 @@
+## Importing Libraries
 import pandas as pd
 import polars as pl
 from datetime import date
@@ -14,48 +15,47 @@ import boto3
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import gc as gc_module
 import re
 
-def get_config():
-    config = yaml.safe_load(open("../config.yml", "r"))
-    return config
+gs = pygsheets.authorize(
+    service_file='/Users/banajabhishekchanappa/Downloads/data/service_account.json')
 
-config = get_config()
+config = yaml.safe_load(open("/Users/banajabhishekchanappa/Tasks/IVRS_ai_appointments/config.yml", "r"))
 
-def create_redshift_connection(config, database):
+
+athena_conn = connect(s3_staging_dir= config['AWS_athena_conn']['s3_staging_dir'],
+               region_name= config['AWS_athena_conn']['region_name'],
+               aws_access_key_id= config['AWS_athena_conn']['access_key_ID'],
+               aws_secret_access_key= config['AWS_athena_conn']['secret_access_key']
+               )
+
+def create_redshift_connection(config_file, database):
     redshift = psycopg2.connect(
-        database=config[database]['database'],
-        user=config[database]['user'],
-        password=config[database]['password'],
-        host=config[database]['host'],
-        port=config[database]['port']
+        database= database,
+        user= config_file['redshift_conn']['user'],
+        password= config_file['redshift_conn']['password'],
+        host= config_file['redshift_conn']['host'],
+        port= config_file['redshift_conn']['port']
     )
     return redshift
 
-clevertap_db = connect(
-    aws_access_key_id = config['athena']['access_key'],
-    aws_secret_access_key = config['athena']['secret'],
-    s3_staging_dir = config['athena']['s3_staging_dir'],
-    region_name = config['athena']['region'],
-)
-
-conn_pii = create_redshift_connection(config, 'pii')
-conn_pwh = create_redshift_connection(config, 'practowarehouse')
+conn_pw = create_redshift_connection(config, 'practowarehouse')
+conn_pii = create_redshift_connection(config, 'practowarehouse_pii')
 olap_db = create_redshift_connection(config, 'olapwarehouse')
-
-gs = pygsheets.authorize(service_file=r'../google_auth.json')
 print('✓ Database connections established')
 
-#Gross_merge_data
-gross_data = os.path.expanduser("../marketplace/transactions_flat/gross_txns_tilldate.csv")
-raw_data = pd.read_csv(gross_data, low_memory=False)
-raw_data =gross_data
+gross_data=pd.read_csv('/Users/banajabhishekchanappa/Downloads/data/gross_txns_till2024.csv')
+gross_data['event_date'] = pd.to_datetime(gross_data['event_date'])
 
-#Local Billing Raw
-bills = os.path.expanduser("../marketplace/offline_clinics/local_billing_raw.csv")
-assured_raw = pd.read_csv(bills, low_memory=False)
+# # Filter data till 30 Nov 2025 (inclusive)
+# gross_data = gross_data[
+#     gross_data['event_date'] <= '2025-11-30'
+# ]
+raw_data = gross_data
+# print('mac of data',gross_data['event_date'].max())
 
+# assured_raw = pd.read_csv(dest, low_memory=False)
+assured_raw = pd.read_csv('/Users/banajabhishekchanappa/Downloads/local_billing_raw (1).csv')
 def load_google_sheet_with_duplicate_headers(sheet):
     values = sheet.get_all_values()
     header = values[0]
@@ -167,8 +167,8 @@ assured_bills_df = (
     .agg({"practo_share":"sum"})
 )
 
-del assured_final
-gc_module.collect()
+# del assured_final
+# gc_module.collect()
 
 dental_ids = clinic_master.ray_practice_id[
     clinic_master.keyword == "General Dentistry"
@@ -238,8 +238,8 @@ raw_data.loc[raw_data['type'] == 'retail_plan_cx', 'practo_share'] = 137
 raw_data['program_name'] = raw_data['program_name'].str.lower()
 
 # Clean up intermediate variable
-del only_corporate_customers
-gc_module.collect()
+# del only_corporate_customers
+# gc_module.collect()
 
 mask_assured = raw_data['program_name'] == 'assured'
 mask_poc = raw_data['program_name'] == 'poc'
@@ -254,8 +254,8 @@ df_assured_monetised = df_assured[df_assured['is_monetised'] == 1]
 df_poc_monetised = df_poc[df_poc['is_monetised'] == 1]
 
 # Clean up intermediate variables
-del mask_assured, mask_poc
-gc_module.collect()
+# del mask_assured, mask_poc
+# gc_module.collect()
 
 assured_txn_summary = (df_assured_monetised.groupby(['practice_id', 'relation_id', 'year_month']).size().reset_index(name='assured_txn_count'))
 
@@ -368,8 +368,8 @@ poc_txn_summary['practo_share1'].fillna(avg_share, inplace=True)
 poc_txn_summary = poc_txn_summary[['practice_id', 'year_month', 'practo_share1']].rename(columns={'practo_share1': 'practo_share'})
 
 # Clean up intermediate variables
-del poc_bills, avg_share
-gc_module.collect()
+# del poc_bills, avg_share
+# gc_module.collect()
 
 assured_bills['practice_id']=assured_bills['practice_id'].astype(str)
 relation_ids['practice_id']=relation_ids['practice_id'].astype(str)
@@ -404,8 +404,8 @@ avg_practo_share = assured_txn_summary['practo_share_y'].mean()
 assured_txn_summary['practo_share_y'] = assured_txn_summary['practo_share_y'].fillna(avg_practo_share).replace("NaN",avg_practo_share)
 
 # Clean up intermediate variables
-del avg_share, avg_practo_share, assurd_bills
-gc_module.collect()
+# del avg_share, avg_practo_share, assurd_bills
+# gc_module.collect()
 
 assured_txn_summary=assured_txn_summary[['practice_id','relation_id','year_month','practo_share_y']]
 df_assured_monetised.head()
@@ -429,10 +429,10 @@ raw_data_final = pd.concat([df_others[common_cols],df_assured_monetised[common_c
 raw_data_final = raw_data_final.sort_values(by=['mobile', 'event_date']).reset_index(drop=True)
 
 # Clean up intermediate variables after concatenation
-del df_others, df_assured_monetised, df_poc_monetised1, raw_data_relation_id_0, raw_data_relation_id_non0
-del relation_spec_practice_level1, relation__spec, spec_counts, relation_spec_practice_level
-del doc_spec_query, relation_ids
-gc_module.collect()
+# del df_others, df_assured_monetised, df_poc_monetised1, raw_data_relation_id_0, raw_data_relation_id_non0
+# del relation_spec_practice_level1, relation__spec, spec_counts, relation_spec_practice_level
+# del doc_spec_query, relation_ids
+# gc_module.collect()
 
 avg=raw_data_final.groupby('type')['practo_share'].mean().reset_index()
 avg1=raw_data_final.groupby('program_name')['practo_share'].mean().reset_index()
@@ -440,7 +440,7 @@ df_retsil=raw_data_final[raw_data_final['type']=='retail_plan_cx'].sort_values(b
 df1_filtered=raw_data_final
 
 #Reading the sheet and fetching the data from sheet
-gs = pygsheets.authorize(service_file='../google_auth.json')
+gs = pygsheets.authorize(service_file='/Users/banajabhishekchanappa/Downloads/data/service_account.json')
 cac_cor = gs.open_by_key('1KLVyX2n3uLp1rK6q4rlv97bCZInzeec-tPnc9fhPULQ')
 value_sheet = cac_cor.worksheet('id', 1709595522)
 values = value_sheet.get_as_df(start='a1', end='c')
@@ -460,8 +460,8 @@ final_data['event_date'] = pd.to_datetime(final_data['event_date'])
 final_data['month'] = pd.to_datetime(final_data['month'])
 
 # Clean up intermediate variables
-del avg, avg1, df_retsil, df1_filtered, values, cac_cor, value_sheet
-gc_module.collect()
+# del avg, avg1, df_retsil, df1_filtered, values, cac_cor, value_sheet
+# gc_module.collect()
 
 monthly = (final_data.groupby(['mobile','month']).agg(contribution=('contribution','sum'),gross_txns=('id','count'),monetised_txns=('is_monetised','sum')).reset_index().sort_values(['mobile','month']))
 
@@ -504,8 +504,8 @@ monthly = monthly_pl.to_pandas()
 print("✓ Monthly tags computed")
 
 # Clean up Polars DataFrame after conversion
-del monthly_pl
-gc_module.collect()
+# del monthly_pl
+# gc_module.collect()
 
 final_data = final_data.merge(monthly[['mobile','month','tag']],on=['mobile','month'],how='left')
 final_data['event_date'] = pd.to_datetime(final_data['event_date'])
@@ -518,10 +518,6 @@ latest_tags = (final_data.sort_values('event_date').groupby('mobile', as_index=F
 final_data = final_data.merge(latest_tags, on='mobile', how='left')
 final_data['tag'] = final_data['latest_tag']
 final_data = final_data.drop(columns='latest_tag')
-
-# Clean up intermediate variable
-del latest_tags
-gc_module.collect()
 
 # Ensure dates are datetime
 final_data['event_date'] = pd.to_datetime(final_data['event_date'])
@@ -568,7 +564,7 @@ for target in target_months:
         ][['mobile', 'tag']].drop_duplicates()
         prev_pairs = set(zip(prev_hist['mobile'], prev_hist['tag']))
         agg['status'] = ["Retained" if (m, t) in prev_pairs else "New" for m, t in zip(agg['mobile'], agg['tag'])]
-
+        
     summary = (
         agg.groupby(['month', 'tag', 'status'])
         .agg(
@@ -581,13 +577,9 @@ for target in target_months:
     )
 
     results.append(summary)
-
-# ✅ Final Output
+    
 final_summary = pd.concat(results, ignore_index=True)
 print("✓ Final summary computed ")
-
-del results
-gc_module.collect()
 
 final_summary['gm']=final_summary['gm'].astype(int)
 current_month = final_summary['month'].max()
